@@ -311,84 +311,75 @@ where
     /// the in-memory changes will be discarded.
     pub fn revert_to(
         &mut self,
-        _requested_id: ChangeID,
+        requested_id: ChangeID,
+        current_id: ChangeID,
     ) -> Result<(), BonsaiStorageError<DB::DatabaseError>> {
-        // self.tries.reset_to_last_commit()?;
+        self.tries.reset_to_last_commit()?;
 
-        // let kv = self.tries.db_mut();
+        let kv = self.tries.db_mut();
 
-        // // Clear current changes
-        // kv.changes_store.current_changes.0.clear();
+        // Clear current changes
+        kv.changes_store.current_changes.0.clear();
 
-        // // If requested equals last recorded, do nothing
-        // if Some(&requested_id) == kv.changes_store.id_queue.back() {
-        //     return Ok(());
-        // }
+        let revert_to_id = requested_id.as_u64();
+        let latest_id = current_id.as_u64();
+        let next_id = latest_id.saturating_add(1);
 
-        // // Make sure we are not trying to revert with an invalid id
-        // let Some(id_position) = kv
-        //     .changes_store
-        //     .id_queue
-        //     .iter()
-        //     .position(|id| *id == requested_id)
-        // else {
-        //     return Err(BonsaiStorageError::GoTo(format!(
-        //         "Requested id {:?} was removed or has not been recorded",
-        //         requested_id
-        //     )));
-        // };
+        // ensure that the id is the latest by checking for an id one higher
+        // note that we don't use contains() because we have a prefix, not the full key
+        let next_id = ChangeID::from_u64(next_id);
+        if let Ok(matches) = kv
+            .db
+            .get_by_prefix(&DatabaseKey::TrieLog(&next_id.to_bytes()))
+        {
+            if !matches.is_empty() {
+                return Err(BonsaiStorageError::GoTo(format!(
+                    "current_id ({}) is not the latest",
+                    latest_id
+                )));
+            }
+        }
 
-        // // Accumulate changes from requested to last recorded
-        // let mut full = Vec::new();
-        // for id in kv
-        //     .changes_store
-        //     .id_queue
-        //     .iter()
-        //     .skip(id_position)
-        //     .rev()
-        //     .take_while(|id| *id != &requested_id)
-        // {
-        //     full.extend(
-        //         ChangeBatch::deserialize(
-        //             id,
-        //             kv.db.get_by_prefix(&DatabaseKey::TrieLog(&id.to_bytes()))?,
-        //         )
-        //         .0,
-        //     );
-        // }
+        // If requested equals last recorded, do nothing
+        if latest_id == revert_to_id {
+            return Ok(());
+        } else if latest_id < revert_to_id {
+            return Err(BonsaiStorageError::GoTo(
+                "current_id must be >= revert_to".to_string(),
+            ));
+        }
 
-        // // Revert changes
-        // let mut batch = kv.db.create_batch();
-        // for (key, change) in full.iter().rev() {
-        //     let key = DatabaseKey::from(key);
-        //     match (&change.old_value, &change.new_value) {
-        //         (Some(old_value), Some(_)) => {
-        //             kv.db.insert(&key, old_value, Some(&mut batch))?;
-        //         }
-        //         (Some(old_value), None) => {
-        //             kv.db.insert(&key, old_value, Some(&mut batch))?;
-        //         }
-        //         (None, Some(_)) => {
-        //             kv.db.remove(&key, Some(&mut batch))?;
-        //         }
-        //         (None, None) => unreachable!(),
-        //     };
-        // }
+        let mut batch = kv.db.create_batch();
+        for id in (revert_to_id + 1..=latest_id).rev() {
+            let id = ChangeID::from_u64(id);
 
-        // // Truncate trie logs at the requested id
-        // let mut truncated = kv.changes_store.id_queue.split_off(id_position);
-        // if let Some(current) = truncated.pop_front() {
-        //     kv.changes_store.id_queue.push_back(current);
-        // }
-        // for id in truncated.iter() {
-        //     kv.db
-        //         .remove_by_prefix(&DatabaseKey::TrieLog(&id.to_bytes()))?;
-        // }
+            let changes = changes::ChangeBatch::deserialize(
+                &id,
+                kv.db.get_by_prefix(&DatabaseKey::TrieLog(&id.to_bytes()))?,
+            )
+            .0;
 
-        // // Write revert changes and trie logs truncation
-        // kv.db.write_batch(batch)?;
-        // Ok(())
-        todo!()
+            kv.db
+                .remove_by_prefix(&DatabaseKey::TrieLog(&id.to_bytes()))?;
+
+            // Add revert changes to batch
+            for (key, change) in changes {
+                let key = DatabaseKey::from(&key);
+                match (&change.old_value, &change.new_value) {
+                    (Some(old_value), _) => {
+                        kv.db.insert(&key, old_value, Some(&mut batch))?;
+                    }
+                    (None, Some(_)) => {
+                        kv.db.remove(&key, Some(&mut batch))?;
+                    }
+                    (None, None) => unreachable!(),
+                };
+            }
+        }
+
+        // Write revert changes and trie logs truncation
+        kv.db.write_batch(batch)?;
+        Ok(())
     }
 
     /// Get all changes applied at a certain commit ID.
