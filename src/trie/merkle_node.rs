@@ -4,11 +4,12 @@
 //! For more information about how these Starknet trees are structured, see
 //! [`MerkleTree`](super::merkle_tree::MerkleTree).
 
+use crate::hasher::BonsaiHasher;
 use crate::BitSlice;
 use bitvec::view::BitView;
 use core::fmt;
 use parity_scale_codec::{Decode, Encode};
-use starknet_types_core::{felt::Felt, hash::StarkHash};
+use starknet_types_core::felt::Felt;
 
 use super::{path::Path, tree::NodeKey};
 
@@ -231,10 +232,15 @@ impl EdgeNode {
     }
 }
 
-pub fn hash_binary_node<H: StarkHash>(left_hash: Felt, right_hash: Felt) -> Felt {
+pub fn hash_binary_node<H: BonsaiHasher>(left_hash: Felt, right_hash: Felt) -> Felt {
     H::hash(&left_hash, &right_hash)
 }
-pub fn hash_edge_node<H: StarkHash>(path: &Path, child_hash: Felt) -> Felt {
+pub fn hash_edge_node<H: BonsaiHasher>(path: &Path, child_hash: Felt) -> Felt {
+    let (felt_path, length) = edge_hash_inputs(path);
+    H::hash(&child_hash, &felt_path) + length
+}
+
+pub(crate) fn edge_hash_inputs(path: &Path) -> (Felt, Felt) {
     let mut bytes = [0u8; 32];
     bytes.view_bits_mut()[256 - path.len()..].copy_from_bitslice(path);
 
@@ -244,7 +250,7 @@ pub fn hash_edge_node<H: StarkHash>(path: &Path, child_hash: Felt) -> Felt {
     length[31] = path.len() as u8;
 
     let length = Felt::from_bytes_be(&length);
-    H::hash(&child_hash, &felt_path) + length
+    (felt_path, length)
 }
 
 #[test]

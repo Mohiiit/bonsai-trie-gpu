@@ -16,6 +16,8 @@ std = [
 ]
 # internal
 bench = []
+pedersen-gpu = ["dep:pedersen-hash-gpu", "pedersen-hash-gpu/std"]
+pedersen-gpu-cuda = ["pedersen-gpu", "pedersen-hash-gpu/cuda"]
 
 [dependencies]
 bitvec = { version = "1", default-features = false, features = ["alloc"] }
@@ -41,6 +43,7 @@ starknet-types-core = { version = "0.2.1", default-features = false, features = 
   "parity-scale-codec",
   "alloc",
 ] }
+pedersen-hash-gpu = { git = "https://github.com/Mohiiit/pedersen-hash-gpu", branch = "master", optional = true, default-features = false }
 
 # Optionals
 rocksdb = { optional = true, version = "0.22", features = [

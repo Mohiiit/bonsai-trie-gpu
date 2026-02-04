@@ -2,9 +2,10 @@ use core::{fmt, marker::PhantomData};
 use core::{iter, mem};
 use parity_scale_codec::Decode;
 use slotmap::SlotMap;
-use starknet_types_core::{felt::Felt, hash::StarkHash};
+use starknet_types_core::felt::Felt;
 
-use crate::trie::merkle_node::{hash_binary_node, hash_edge_node};
+use crate::hasher::BonsaiHasher;
+use crate::trie::merkle_node::{edge_hash_inputs, hash_binary_node, hash_edge_node};
 use crate::BitVec;
 use crate::{
     error::BonsaiStorageError, format, hash_map, id::Id, vec, BitSlice, BonsaiDatabase, ByteVec,
@@ -54,7 +55,7 @@ pub(crate) enum RootHandle {
 /// states.
 ///
 /// For more information on how this functions internally, see [here](super::merkle_node).
-pub struct MerkleTree<H: StarkHash> {
+pub struct MerkleTree<H: BonsaiHasher> {
     /// The root node. None means the node has not been loaded yet.
     pub(crate) root_node: Option<RootHandle>,
     /// In-memory nodes.
@@ -71,7 +72,7 @@ pub struct MerkleTree<H: StarkHash> {
     _hasher: PhantomData<H>,
 }
 
-impl<H: StarkHash> fmt::Debug for MerkleTree<H> {
+impl<H: BonsaiHasher> fmt::Debug for MerkleTree<H> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("MerkleTree")
             .field("root_node", &self.root_node)
@@ -85,7 +86,7 @@ impl<H: StarkHash> fmt::Debug for MerkleTree<H> {
 
 // NB: #[derive(Clone)] does not work because it expands to an impl block which forces H: Clone, which Pedersen/Poseidon aren't.
 #[cfg(feature = "bench")]
-impl<H: StarkHash> Clone for MerkleTree<H> {
+impl<H: BonsaiHasher> Clone for MerkleTree<H> {
     fn clone(&self) -> Self {
         Self {
             max_height: self.max_height,
@@ -109,7 +110,7 @@ enum NodeOrFelt<'a> {
     Felt(Felt),
 }
 
-impl<H: StarkHash + Send + Sync> MerkleTree<H> {
+impl<H: BonsaiHasher + Send + Sync> MerkleTree<H> {
     pub fn new(identifier: ByteVec, max_height: u8) -> Self {
         Self {
             root_node: None,
@@ -379,6 +380,147 @@ impl<H: StarkHash + Send + Sync> MerkleTree<H> {
         Ok(NodeOrFelt::Node(node))
     }
 
+    fn collect_hash_order<DB: BonsaiDatabase>(
+        &self,
+        node_id: NodeKey,
+        order: &mut Vec<NodeKey>,
+        heights: &mut HashMap<NodeKey, usize>,
+    ) -> Result<usize, BonsaiStorageError<DB::DatabaseError>> {
+        let node = self.nodes.get(node_id).ok_or(BonsaiStorageError::Trie(
+            "Couldn't fetch node in the temporary storage".to_string(),
+        ))?;
+
+        let height = match node {
+            Node::Binary(binary) => {
+                let left_height = match binary.left {
+                    NodeHandle::Hash(_) => 0,
+                    NodeHandle::InMemory(child_id) => {
+                        self.collect_hash_order::<DB>(child_id, order, heights)?
+                    }
+                };
+                let right_height = match binary.right {
+                    NodeHandle::Hash(_) => 0,
+                    NodeHandle::InMemory(child_id) => {
+                        self.collect_hash_order::<DB>(child_id, order, heights)?
+                    }
+                };
+                left_height.max(right_height) + 1
+            }
+            Node::Edge(edge) => match edge.child {
+                NodeHandle::Hash(_) => 1,
+                NodeHandle::InMemory(child_id) => {
+                    self.collect_hash_order::<DB>(child_id, order, heights)? + 1
+                }
+            },
+        };
+
+        order.push(node_id);
+        heights.insert(node_id, height);
+        Ok(height)
+    }
+
+    fn compute_hashes_batched<DB: BonsaiDatabase>(
+        &self,
+        root_id: NodeKey,
+        hashes: &mut Vec<Felt>,
+    ) -> Result<Felt, BonsaiStorageError<DB::DatabaseError>> {
+        let mut order: Vec<NodeKey> = Vec::new();
+        let mut heights: HashMap<NodeKey, usize> = HashMap::new();
+        let max_height = self.collect_hash_order::<DB>(root_id, &mut order, &mut heights)?;
+
+        let mut levels: Vec<Vec<NodeKey>> = vec![Vec::new(); max_height + 1];
+        for node_id in &order {
+            let height = *heights.get(node_id).ok_or(BonsaiStorageError::Trie(
+                "Missing node height during hash computation".to_string(),
+            ))?;
+            levels[height].push(*node_id);
+        }
+
+        let mut hash_cache: HashMap<NodeKey, Felt> = HashMap::new();
+        for level in 1..=max_height {
+            let nodes = &levels[level];
+            if nodes.is_empty() {
+                continue;
+            }
+
+            let mut pairs: Vec<(Felt, Felt)> = Vec::with_capacity(nodes.len());
+            let mut edge_add: Vec<Option<Felt>> = Vec::with_capacity(nodes.len());
+
+            for node_id in nodes {
+                let node = self.nodes.get(*node_id).ok_or(BonsaiStorageError::Trie(
+                    "Couldn't fetch node in the temporary storage".to_string(),
+                ))?;
+
+                match node {
+                    Node::Binary(binary) => {
+                        let left_hash = match binary.left {
+                            NodeHandle::Hash(felt) => felt,
+                            NodeHandle::InMemory(child_id) => {
+                                *hash_cache.get(&child_id).ok_or(BonsaiStorageError::Trie(
+                                    "Missing left child hash during batch computation".to_string(),
+                                ))?
+                            }
+                        };
+                        let right_hash = match binary.right {
+                            NodeHandle::Hash(felt) => felt,
+                            NodeHandle::InMemory(child_id) => {
+                                *hash_cache.get(&child_id).ok_or(BonsaiStorageError::Trie(
+                                    "Missing right child hash during batch computation".to_string(),
+                                ))?
+                            }
+                        };
+                        pairs.push((left_hash, right_hash));
+                        edge_add.push(None);
+                    }
+                    Node::Edge(edge) => {
+                        let child_hash = match edge.child {
+                            NodeHandle::Hash(felt) => felt,
+                            NodeHandle::InMemory(child_id) => {
+                                *hash_cache.get(&child_id).ok_or(BonsaiStorageError::Trie(
+                                    "Missing edge child hash during batch computation".to_string(),
+                                ))?
+                            }
+                        };
+                        let (felt_path, length) = edge_hash_inputs(&edge.path);
+                        pairs.push((child_hash, felt_path));
+                        edge_add.push(Some(length));
+                    }
+                }
+            }
+
+            let results = H::hash_pairs(&pairs);
+            if results.len() != nodes.len() {
+                return Err(BonsaiStorageError::Trie(
+                    "Hasher returned incorrect number of results".to_string(),
+                ));
+            }
+
+            for (idx, node_id) in nodes.iter().enumerate() {
+                let mut hash = results[idx];
+                if let Some(add) = edge_add[idx] {
+                    hash = hash + add;
+                }
+                hash_cache.insert(*node_id, hash);
+            }
+        }
+
+        hashes.clear();
+        hashes.reserve(order.len());
+        for node_id in &order {
+            let hash = *hash_cache.get(node_id).ok_or(BonsaiStorageError::Trie(
+                "Missing computed hash during output ordering".to_string(),
+            ))?;
+            hashes.push(hash);
+        }
+
+        hash_cache
+            .get(&root_id)
+            .copied()
+            .ok_or(BonsaiStorageError::Trie(
+                "Missing root hash after batch computation".to_string(),
+            ))
+    }
+
     fn compute_root_hash<DB: BonsaiDatabase>(
         &self,
         hashes: &mut Vec<Felt>,
@@ -392,18 +534,21 @@ impl<H: StarkHash + Send + Sync> MerkleTree<H> {
                 ))
             }
         };
+        if H::prefers_batched() {
+            return self.compute_hashes_batched::<DB>(handle, hashes);
+        }
         let Some(node) = self.nodes.get(handle) else {
             return Err(BonsaiStorageError::Trie(
                 "Could not fetch root node from storage".to_string(),
             ));
         };
-        self.compute_hashes::<DB>(node, Path::default(), hashes)
+        self.compute_hashes_sequential::<DB>(node, Path::default(), hashes)
     }
 
     /// Compute the hashes of all of the updated nodes in the merkle tree. This step
     /// is separate from [`commit_subtree`] as it is done in parallel using rayon.
     /// Computed hashes are pushed to the `hashes` vector, depth first.
-    fn compute_hashes<DB: BonsaiDatabase>(
+    fn compute_hashes_sequential<DB: BonsaiDatabase>(
         &self,
         node: &Node,
         path: Path,
@@ -425,11 +570,14 @@ impl<H: StarkHash + Send + Sync> MerkleTree<H> {
                     (NodeOrFelt::Node(left), NodeOrFelt::Node(right)) => {
                         // two children: use rayon
                         let (left, right) = rayon::join(
-                            || self.compute_hashes::<DB>(left, left_path, hashes),
+                            || self.compute_hashes_sequential::<DB>(left, left_path, hashes),
                             || {
                                 let mut hashes = vec![];
-                                let felt =
-                                    self.compute_hashes::<DB>(right, right_path, &mut hashes)?;
+                                let felt = self.compute_hashes_sequential::<DB>(
+                                    right,
+                                    right_path,
+                                    &mut hashes,
+                                )?;
                                 Ok::<_, BonsaiStorageError<DB::DatabaseError>>((felt, hashes))
                             },
                         );
@@ -442,13 +590,13 @@ impl<H: StarkHash + Send + Sync> MerkleTree<H> {
                         let left_hash = match left {
                             NodeOrFelt::Felt(felt) => felt,
                             NodeOrFelt::Node(node) => {
-                                self.compute_hashes::<DB>(node, left_path, hashes)?
+                                self.compute_hashes_sequential::<DB>(node, left_path, hashes)?
                             }
                         };
                         let right_hash = match right {
                             NodeOrFelt::Felt(felt) => felt,
                             NodeOrFelt::Node(node) => {
-                                self.compute_hashes::<DB>(node, right_path, hashes)?
+                                self.compute_hashes_sequential::<DB>(node, right_path, hashes)?
                             }
                         };
                         (left_hash, right_hash)
@@ -467,7 +615,7 @@ impl<H: StarkHash + Send + Sync> MerkleTree<H> {
                 let child_hash = match self.get_node_or_felt::<DB>(&edge.child)? {
                     NodeOrFelt::Felt(felt) => felt,
                     NodeOrFelt::Node(node) => {
-                        self.compute_hashes::<DB>(node, child_path, hashes)?
+                        self.compute_hashes_sequential::<DB>(node, child_path, hashes)?
                     }
                 };
 

@@ -3,12 +3,15 @@ use super::{
     path::Path,
     tree::{MerkleTree, NodeKey},
 };
-use crate::{id::Id, key_value_db::KeyValueDB, BitSlice, BonsaiDatabase, BonsaiStorageError, Vec};
+use crate::{
+    hasher::BonsaiHasher, id::Id, key_value_db::KeyValueDB, BitSlice, BonsaiDatabase,
+    BonsaiStorageError, Vec,
+};
 use core::{fmt, marker::PhantomData};
-use starknet_types_core::{felt::Felt, hash::StarkHash};
+use starknet_types_core::felt::Felt;
 
 /// This trait's function will be called on every node visited during a seek operation.
-pub trait NodeVisitor<H: StarkHash> {
+pub trait NodeVisitor<H: BonsaiHasher> {
     fn visit_node<DB: BonsaiDatabase>(
         &mut self,
         tree: &mut MerkleTree<H>,
@@ -18,7 +21,7 @@ pub trait NodeVisitor<H: StarkHash> {
 }
 
 pub struct NoopVisitor<H>(PhantomData<H>);
-impl<H: StarkHash> NodeVisitor<H> for NoopVisitor<H> {
+impl<H: BonsaiHasher> NodeVisitor<H> for NoopVisitor<H> {
     fn visit_node<DB: BonsaiDatabase>(
         &mut self,
         _tree: &mut MerkleTree<H>,
@@ -29,7 +32,7 @@ impl<H: StarkHash> NodeVisitor<H> for NoopVisitor<H> {
     }
 }
 
-pub struct MerkleTreeIterator<'a, H: StarkHash, DB: BonsaiDatabase, ID: Id> {
+pub struct MerkleTreeIterator<'a, H: BonsaiHasher, DB: BonsaiDatabase, ID: Id> {
     pub(crate) tree: &'a mut MerkleTree<H>,
     pub(crate) db: &'a KeyValueDB<DB, ID>,
     /// Current iteration path.
@@ -42,7 +45,7 @@ pub struct MerkleTreeIterator<'a, H: StarkHash, DB: BonsaiDatabase, ID: Id> {
     pub(crate) leaf_hash: Option<Felt>,
 }
 
-impl<'a, H: StarkHash, DB: BonsaiDatabase, ID: Id> fmt::Debug
+impl<'a, H: BonsaiHasher, DB: BonsaiDatabase, ID: Id> fmt::Debug
     for MerkleTreeIterator<'a, H, DB, ID>
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -54,7 +57,9 @@ impl<'a, H: StarkHash, DB: BonsaiDatabase, ID: Id> fmt::Debug
     }
 }
 
-impl<'a, H: StarkHash + Send + Sync, DB: BonsaiDatabase, ID: Id> MerkleTreeIterator<'a, H, DB, ID> {
+impl<'a, H: BonsaiHasher + Send + Sync, DB: BonsaiDatabase, ID: Id>
+    MerkleTreeIterator<'a, H, DB, ID>
+{
     pub fn new(tree: &'a mut MerkleTree<H>, db: &'a KeyValueDB<DB, ID>) -> Self {
         Self {
             tree,
@@ -254,6 +259,7 @@ mod tests {
 
     use crate::{
         databases::{create_rocks_db, RocksDB, RocksDBConfig},
+        hasher::BonsaiHasher,
         id::{BasicId, Id},
         trie::iterator::MerkleTreeIterator,
         BonsaiDatabase, BonsaiStorage, BonsaiStorageConfig,
@@ -261,10 +267,7 @@ mod tests {
     use bitvec::{bits, order::Msb0};
     use prop::{collection::vec, sample::size_range};
     use proptest::prelude::*;
-    use starknet_types_core::{
-        felt::Felt,
-        hash::{Pedersen, StarkHash},
-    };
+    use starknet_types_core::{felt::Felt, hash::Pedersen};
 
     const ONE: Felt = Felt::ONE;
     const TWO: Felt = Felt::TWO;
@@ -317,7 +320,7 @@ mod tests {
     }
 
     #[allow(clippy::type_complexity)]
-    fn all_cases<H: StarkHash + Send + Sync, DB: BonsaiDatabase, ID: Id>(
+    fn all_cases<H: BonsaiHasher + Send + Sync, DB: BonsaiDatabase, ID: Id>(
     ) -> Vec<fn(&mut MerkleTreeIterator<H, DB, ID>)> {
         vec![
             // SEEK TO LEAF

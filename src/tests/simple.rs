@@ -991,6 +991,51 @@ fn test_block_7_starknet_2() {
     )
 }
 
+#[cfg(feature = "pedersen-gpu")]
+#[test]
+fn pedersen_gpu_matches_cpu_root_hash() {
+    let identifier = vec![];
+    let config = BonsaiStorageConfig::default();
+
+    let mut cpu: BonsaiStorage<BasicId, _, Pedersen> =
+        BonsaiStorage::new(HashMapDb::<BasicId>::default(), config.clone(), 24);
+    let mut gpu: BonsaiStorage<BasicId, _, crate::PedersenGpu> =
+        BonsaiStorage::new(HashMapDb::<BasicId>::default(), config, 24);
+
+    let inputs = vec![
+        (vec![1, 2, 3, 4], Felt::from(11u64)),
+        (vec![1, 2, 3, 5], Felt::from(22u64)),
+        (vec![1, 2, 4, 0], Felt::from(33u64)),
+        (vec![2, 0, 0, 1], Felt::from(44u64)),
+    ];
+
+    for (key, value) in &inputs {
+        let bitvec = BitVec::from_vec(key.clone());
+        cpu.insert(&identifier, &bitvec, value).unwrap();
+        gpu.insert(&identifier, &bitvec, value).unwrap();
+    }
+
+    let mut id_builder = BasicIdBuilder::new();
+    let commit_id = id_builder.new_id();
+    cpu.commit(commit_id).unwrap();
+    gpu.commit(commit_id).unwrap();
+
+    let update_key = BitVec::from_vec(vec![1, 2, 3, 5]);
+    cpu.insert(&identifier, &update_key, &Felt::from(99u64))
+        .unwrap();
+    gpu.insert(&identifier, &update_key, &Felt::from(99u64))
+        .unwrap();
+
+    let commit_id = id_builder.new_id();
+    cpu.commit(commit_id).unwrap();
+    gpu.commit(commit_id).unwrap();
+
+    assert_eq!(
+        cpu.root_hash(&identifier).unwrap(),
+        gpu.root_hash(&identifier).unwrap()
+    );
+}
+
 #[test]
 fn test_block_9() {
     let config = BonsaiStorageConfig::default();

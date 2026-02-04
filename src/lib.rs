@@ -17,7 +17,8 @@
 //! let config = BonsaiStorageConfig::default();
 //!
 //! let identifier = vec![];
-//! let mut bonsai_storage: BonsaiStorage<_, _, Pedersen> = BonsaiStorage::new(RocksDB::new(&db, RocksDBConfig::default()), config).unwrap();
+//! let mut bonsai_storage: BonsaiStorage<_, _, Pedersen> =
+//!     BonsaiStorage::new(RocksDB::new(&db, RocksDBConfig::default()), config, 251);
 //! let mut id_builder = BasicIdBuilder::new();
 //!
 //! let pair1 = (vec![1, 2, 1], Felt::from_hex("0x66342762FDD54D033c195fec3ce2568b62052e").unwrap());
@@ -116,6 +117,7 @@ pub type BitVec = bitvec::vec::BitVec<u8, bitvec::order::Msb0>;
 pub type BitSlice = bitvec::slice::BitSlice<u8, bitvec::order::Msb0>;
 
 mod changes;
+mod hasher;
 mod key_value_db;
 mod trie;
 
@@ -128,6 +130,9 @@ pub mod id;
 
 pub use bonsai_database::{BonsaiDatabase, BonsaiPersistentDatabase, DBError, DatabaseKey};
 pub use error::BonsaiStorageError;
+pub use hasher::BonsaiHasher;
+#[cfg(feature = "pedersen-gpu")]
+pub use hasher::PedersenGpu;
 pub use trie::path::Path;
 pub use trie::proof::{MultiProof, ProofNode};
 
@@ -152,7 +157,7 @@ pub(crate) trait EncodeExt: parity_scale_codec::Encode {
 impl<T: parity_scale_codec::Encode> EncodeExt for T {}
 
 use key_value_db::KeyValueDB;
-use starknet_types_core::{felt::Felt, hash::StarkHash};
+use starknet_types_core::felt::Felt;
 use trie::{tree::bytes_to_bitvec, trees::MerkleTrees};
 
 /// Structure that contains the configuration for the BonsaiStorage.
@@ -196,11 +201,11 @@ pub struct Change {
 /// Structure that hold the trie and all the necessary information to work with it.
 ///
 /// This structure is the main entry point to work with this crate.
-pub struct BonsaiStorage<ChangeID: Id, DB: BonsaiDatabase, H: StarkHash + Send + Sync> {
+pub struct BonsaiStorage<ChangeID: Id, DB: BonsaiDatabase, H: BonsaiHasher + Send + Sync> {
     tries: MerkleTrees<H, DB, ChangeID>,
 }
 
-impl<ChangeID: Id, DB: BonsaiDatabase + fmt::Debug, H: StarkHash + Send + Sync> fmt::Debug
+impl<ChangeID: Id, DB: BonsaiDatabase + fmt::Debug, H: BonsaiHasher + Send + Sync> fmt::Debug
     for BonsaiStorage<ChangeID, DB, H>
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -215,7 +220,7 @@ impl<ChangeID, DB, H> Clone for BonsaiStorage<ChangeID, DB, H>
 where
     DB: BonsaiDatabase + Clone,
     ChangeID: id::Id,
-    H: StarkHash + Send + Sync,
+    H: BonsaiHasher + Send + Sync,
 {
     fn clone(&self) -> Self {
         Self {
@@ -231,7 +236,7 @@ impl<ChangeID, DB, H> BonsaiStorage<ChangeID, DB, H>
 where
     DB: BonsaiDatabase,
     ChangeID: id::Id,
-    H: StarkHash + Send + Sync,
+    H: BonsaiHasher + Send + Sync,
 {
     /// Create a new bonsai storage instance
     pub fn new(db: DB, config: BonsaiStorageConfig, max_height: u8) -> Self {
@@ -455,7 +460,7 @@ impl<ChangeID, DB, H> BonsaiStorage<ChangeID, DB, H>
 where
     DB: BonsaiDatabase + BonsaiPersistentDatabase<ChangeID>,
     ChangeID: id::Id,
-    H: StarkHash + Send + Sync,
+    H: BonsaiHasher + Send + Sync,
 {
     /// Update trie and database using all changes since the last commit.
     pub fn commit(

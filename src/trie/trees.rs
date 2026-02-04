@@ -1,18 +1,19 @@
 use super::{proof::MultiProof, tree::MerkleTree};
+use crate::hasher::BonsaiHasher;
 use crate::{
     id::Id, key_value_db::KeyValueDB, trie::tree::InsertOrRemove, BitSlice, BonsaiDatabase,
     BonsaiStorageError, ByteVec, HashMap, Vec,
 };
 use core::fmt;
-use starknet_types_core::{felt::Felt, hash::StarkHash};
+use starknet_types_core::felt::Felt;
 
-pub(crate) struct MerkleTrees<H: StarkHash + Send + Sync, DB: BonsaiDatabase, CommitID: Id> {
+pub(crate) struct MerkleTrees<H: BonsaiHasher + Send + Sync, DB: BonsaiDatabase, CommitID: Id> {
     pub db: KeyValueDB<DB, CommitID>,
     pub trees: HashMap<ByteVec, MerkleTree<H>>,
     pub max_height: u8,
 }
 
-impl<H: StarkHash + Send + Sync, DB: BonsaiDatabase + fmt::Debug, CommitID: Id> fmt::Debug
+impl<H: BonsaiHasher + Send + Sync, DB: BonsaiDatabase + fmt::Debug, CommitID: Id> fmt::Debug
     for MerkleTrees<H, DB, CommitID>
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -24,7 +25,7 @@ impl<H: StarkHash + Send + Sync, DB: BonsaiDatabase + fmt::Debug, CommitID: Id> 
 }
 
 #[cfg(feature = "bench")]
-impl<H: StarkHash + Send + Sync, DB: BonsaiDatabase + Clone, CommitID: Id> Clone
+impl<H: BonsaiHasher + Send + Sync, DB: BonsaiDatabase + Clone, CommitID: Id> Clone
     for MerkleTrees<H, DB, CommitID>
 {
     fn clone(&self) -> Self {
@@ -36,7 +37,7 @@ impl<H: StarkHash + Send + Sync, DB: BonsaiDatabase + Clone, CommitID: Id> Clone
     }
 }
 
-impl<H: StarkHash + Send + Sync, DB: BonsaiDatabase, CommitID: Id> MerkleTrees<H, DB, CommitID> {
+impl<H: BonsaiHasher + Send + Sync, DB: BonsaiDatabase, CommitID: Id> MerkleTrees<H, DB, CommitID> {
     pub(crate) fn new(db: KeyValueDB<DB, CommitID>, tree_height: u8) -> Self {
         Self {
             db,

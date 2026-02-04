@@ -4,6 +4,7 @@ use super::{
     tree::MerkleTree,
 };
 use crate::{
+    hasher::BonsaiHasher,
     id::Id,
     key_value_db::KeyValueDB,
     trie::{
@@ -15,7 +16,7 @@ use crate::{
 };
 use core::{marker::PhantomData, mem};
 use hashbrown::hash_set;
-use starknet_types_core::{felt::Felt, hash::StarkHash};
+use starknet_types_core::felt::Felt;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ProofVerificationError {
@@ -49,7 +50,7 @@ pub enum ProofNode {
 }
 
 impl ProofNode {
-    pub fn hash<H: StarkHash>(&self) -> Felt {
+    pub fn hash<H: BonsaiHasher>(&self) -> Felt {
         match self {
             ProofNode::Binary { left, right } => hash_binary_node::<H>(*left, *right),
             ProofNode::Edge { child, path } => hash_edge_node::<H>(path, *child),
@@ -66,7 +67,7 @@ impl MultiProof {
     ///
     /// Returns an iterator of the values. Felt::ZERO is returned when the key is not a member of the trie.
     /// Do not forget to check the values returned by the iterator :)
-    pub fn verify_proof<'a, 'b: 'a, H: StarkHash>(
+    pub fn verify_proof<'a, 'b: 'a, H: BonsaiHasher>(
         &'b self,
         root: Felt,
         key_values: impl IntoIterator<Item = impl AsRef<BitSlice>> + 'a,
@@ -157,7 +158,7 @@ impl MultiProof {
     }
 }
 
-impl<H: StarkHash + Send + Sync> MerkleTree<H> {
+impl<H: BonsaiHasher + Send + Sync> MerkleTree<H> {
     /// This function is designed to be very efficient if the `keys` are sorted - this allows for
     /// the minimal amount of backtracking when switching from one key to the next.
     pub fn get_multi_proof<DB: BonsaiDatabase, ID: Id>(
@@ -168,7 +169,7 @@ impl<H: StarkHash + Send + Sync> MerkleTree<H> {
         let max_height = self.max_height;
 
         struct ProofVisitor<H>(MultiProof, PhantomData<H>);
-        impl<H: StarkHash + Send + Sync> NodeVisitor<H> for ProofVisitor<H> {
+        impl<H: BonsaiHasher + Send + Sync> NodeVisitor<H> for ProofVisitor<H> {
             fn visit_node<DB: BonsaiDatabase>(
                 &mut self,
                 tree: &mut MerkleTree<H>,

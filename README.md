@@ -18,6 +18,7 @@ This library implements a trie-based key-value collection with the following pro
 * Trie Logs that allow efficiently reverting the collection state back to a given commit.
 * Thread-safe transactional states allowing to grab and manipulate a consistent view of the collection at a given commit height. This is especially useful for processing data at a given commit height while the collection is still being written to. 
 * Transactional states can be merged back into the trunk state if no collisions happpened in the meantime.
+* Optional GPU-accelerated Pedersen hashing via `PedersenGpu` (features `pedersen-gpu` / `pedersen-gpu-cuda`).
 
 ## Build:
 
@@ -50,7 +51,8 @@ fn main() {
     
     // Create a BonsaiStorage with default parameters.
     let config = BonsaiStorageConfig::default();
-    let mut bonsai_storage: BonsaiStorage<_, _, Pedersen> = BonsaiStorage::new(RocksDB::new(&db, RocksDBConfig::default()), config).unwrap();
+    let mut bonsai_storage: BonsaiStorage<_, _, Pedersen> =
+        BonsaiStorage::new(RocksDB::new(&db, RocksDBConfig::default()), config, 251);
     
     // Create a simple incremental ID builder for commit IDs.
     // This is not necessary, you can use any kind of strictly monotonically increasing value to tag your commits. 
@@ -153,11 +155,37 @@ fn main() {
 }
 ```
 
+## GPU Pedersen (optional)
+
+Enable GPU-backed hashing by switching the hasher to `PedersenGpu` and enabling a feature:
+
+```bash
+cargo build --features pedersen-gpu
+# or, to enable CUDA acceleration:
+cargo build --features pedersen-gpu-cuda
+```
+
+```rust
+use bonsai_trie::{BonsaiStorage, BonsaiStorageConfig, PedersenGpu};
+use bonsai_trie::databases::{RocksDB, create_rocks_db, RocksDBConfig};
+
+let db = create_rocks_db("./rocksdb").unwrap();
+let config = BonsaiStorageConfig::default();
+let mut bonsai_storage: BonsaiStorage<_, _, PedersenGpu> =
+    BonsaiStorage::new(RocksDB::new(&db, RocksDBConfig::default()), config, 251);
+```
+
+Notes:
+* `PedersenGpu` batches node hashing during commits and will fall back to CPU if CUDA is unavailable.
+* For CUDA acceleration, ensure the installed driver/toolkit supports PTX 12.4+ (CUDA 12.4 or newer recommended).
+
 ## Build and run benchmarks
 
 This crate uses `rayon` to parallelize hash computations. As such, results will vary depending on the number of cores of your cpu.
 ```
-cargo bench
+cargo bench --features bench
+# With GPU-backed Pedersen (requires CUDA):
+cargo bench --features "bench pedersen-gpu-cuda"
 ```
 
 ## Acknowledgements
@@ -172,4 +200,3 @@ cargo bench
 - [Besu Bonsai implementation in Java](https://github.com/hyperledger/besu/tree/1a7635bc3ef75c31e5c5ac050b2cd3a22d833ada/ethereum/core/src/main/java/org/hyperledger/besu/ethereum/bonsai)
 - [Madara Starknet Sequencer using Substrate](https://github.com/keep-starknet-strange/madara)
 - [LambdaClass Patricia Merkle Tree implementation in Rust](https://github.com/lambdaclass/merkle_patricia_tree)
-

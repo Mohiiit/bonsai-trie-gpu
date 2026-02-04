@@ -3,13 +3,13 @@ use std::hint::black_box;
 use bonsai_trie::{
     databases::HashMapDb,
     id::{BasicId, BasicIdBuilder},
-    BonsaiStorage, BonsaiStorageConfig,
+    BitVec, BonsaiStorage, BonsaiStorageConfig,
 };
 use criterion::{criterion_group, criterion_main, BatchSize, Criterion};
 use rand::{prelude::*, thread_rng};
 use starknet_types_core::{
     felt::Felt,
-    hash::{Pedersen, Poseidon, StarkHash},
+    hash::{Pedersen, Poseidon},
 };
 
 mod flamegraph;
@@ -21,8 +21,8 @@ fn drop_storage(c: &mut Criterion) {
                 let mut bonsai_storage: BonsaiStorage<BasicId, _, Pedersen> = BonsaiStorage::new(
                     HashMapDb::<BasicId>::default(),
                     BonsaiStorageConfig::default(),
-                )
-                .unwrap();
+                    251,
+                );
 
                 let mut rng = SmallRng::seed_from_u64(42);
                 let felt = Felt::from_hex("0x66342762FDD54D033c195fec3ce2568b62052e").unwrap();
@@ -58,8 +58,8 @@ fn storage_with_insert(c: &mut Criterion) {
                 let bonsai_storage: BonsaiStorage<BasicId, _, Pedersen> = BonsaiStorage::new(
                     HashMapDb::<BasicId>::default(),
                     BonsaiStorageConfig::default(),
-                )
-                .unwrap();
+                    251,
+                );
                 bonsai_storage
             },
             |bonsai_storage| {
@@ -88,8 +88,8 @@ fn storage(c: &mut Criterion) {
         let mut bonsai_storage: BonsaiStorage<BasicId, _, Pedersen> = BonsaiStorage::new(
             HashMapDb::<BasicId>::default(),
             BonsaiStorageConfig::default(),
-        )
-        .unwrap();
+            251,
+        );
         let mut rng = SmallRng::seed_from_u64(42);
 
         let felt = Felt::from_hex("0x66342762FDD54D033c195fec3ce2568b62052e").unwrap();
@@ -121,8 +121,8 @@ fn one_update(c: &mut Criterion) {
         let mut bonsai_storage: BonsaiStorage<BasicId, _, Pedersen> = BonsaiStorage::new(
             HashMapDb::<BasicId>::default(),
             BonsaiStorageConfig::default(),
-        )
-        .unwrap();
+            251,
+        );
         let mut rng = SmallRng::seed_from_u64(42);
 
         let felt = Felt::from_hex("0x66342762FDD54D033c195fec3ce2568b62052e").unwrap();
@@ -158,8 +158,8 @@ fn five_updates(c: &mut Criterion) {
         let mut bonsai_storage: BonsaiStorage<BasicId, _, Pedersen> = BonsaiStorage::new(
             HashMapDb::<BasicId>::default(),
             BonsaiStorageConfig::default(),
-        )
-        .unwrap();
+            251,
+        );
         let mut rng = SmallRng::seed_from_u64(42);
 
         let felt = Felt::from_hex("0x66342762FDD54D033c195fec3ce2568b62052e").unwrap();
@@ -208,8 +208,8 @@ fn multiple_contracts(c: &mut Criterion) {
         let mut bonsai_storage: BonsaiStorage<BasicId, _, Pedersen> = BonsaiStorage::new(
             HashMapDb::<BasicId>::default(),
             BonsaiStorageConfig::default(),
-        )
-        .unwrap();
+            251,
+        );
         let mut rng = thread_rng();
 
         let felt = Felt::from_hex("0x66342762FDD54D033c195fec3ce2568b62052e").unwrap();
