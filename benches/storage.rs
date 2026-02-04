@@ -3,22 +3,33 @@ use std::hint::black_box;
 use bonsai_trie::{
     databases::HashMapDb,
     id::{BasicId, BasicIdBuilder},
-    BitVec, BonsaiStorage, BonsaiStorageConfig,
+    BitVec, BonsaiHasher, BonsaiStorage, BonsaiStorageConfig,
 };
 use criterion::{criterion_group, criterion_main, BatchSize, Criterion};
 use rand::{prelude::*, thread_rng};
 use starknet_types_core::{
     felt::Felt,
-    hash::{Pedersen, Poseidon},
+    hash::{Poseidon, StarkHash},
 };
 
 mod flamegraph;
+
+#[cfg(feature = "pedersen-gpu")]
+use bonsai_trie::PedersenGpu;
+#[cfg(not(feature = "pedersen-gpu"))]
+use starknet_types_core::hash::Pedersen;
+
+#[cfg(feature = "pedersen-gpu")]
+type PedersenBench = PedersenGpu;
+#[cfg(not(feature = "pedersen-gpu"))]
+type PedersenBench = Pedersen;
 
 fn drop_storage(c: &mut Criterion) {
     c.bench_function("drop storage", move |b| {
         b.iter_batched(
             || {
-                let mut bonsai_storage: BonsaiStorage<BasicId, _, Pedersen> = BonsaiStorage::new(
+                let mut bonsai_storage: BonsaiStorage<BasicId, _, PedersenBench> =
+                    BonsaiStorage::new(
                     HashMapDb::<BasicId>::default(),
                     BonsaiStorageConfig::default(),
                     251,
@@ -55,7 +66,8 @@ fn storage_with_insert(c: &mut Criterion) {
         let mut rng = thread_rng();
         b.iter_batched_ref(
             || {
-                let bonsai_storage: BonsaiStorage<BasicId, _, Pedersen> = BonsaiStorage::new(
+                let bonsai_storage: BonsaiStorage<BasicId, _, PedersenBench> =
+                    BonsaiStorage::new(
                     HashMapDb::<BasicId>::default(),
                     BonsaiStorageConfig::default(),
                     251,
@@ -85,7 +97,7 @@ fn storage_with_insert(c: &mut Criterion) {
 
 fn storage(c: &mut Criterion) {
     c.bench_function("storage commit", move |b| {
-        let mut bonsai_storage: BonsaiStorage<BasicId, _, Pedersen> = BonsaiStorage::new(
+        let mut bonsai_storage: BonsaiStorage<BasicId, _, PedersenBench> = BonsaiStorage::new(
             HashMapDb::<BasicId>::default(),
             BonsaiStorageConfig::default(),
             251,
@@ -118,7 +130,7 @@ fn storage(c: &mut Criterion) {
 
 fn one_update(c: &mut Criterion) {
     c.bench_function("one update", move |b| {
-        let mut bonsai_storage: BonsaiStorage<BasicId, _, Pedersen> = BonsaiStorage::new(
+        let mut bonsai_storage: BonsaiStorage<BasicId, _, PedersenBench> = BonsaiStorage::new(
             HashMapDb::<BasicId>::default(),
             BonsaiStorageConfig::default(),
             251,
@@ -155,7 +167,7 @@ fn one_update(c: &mut Criterion) {
 
 fn five_updates(c: &mut Criterion) {
     c.bench_function("five updates", move |b| {
-        let mut bonsai_storage: BonsaiStorage<BasicId, _, Pedersen> = BonsaiStorage::new(
+        let mut bonsai_storage: BonsaiStorage<BasicId, _, PedersenBench> = BonsaiStorage::new(
             HashMapDb::<BasicId>::default(),
             BonsaiStorageConfig::default(),
             251,
@@ -205,7 +217,7 @@ fn five_updates(c: &mut Criterion) {
 
 fn multiple_contracts(c: &mut Criterion) {
     c.bench_function("multiple contracts", move |b| {
-        let mut bonsai_storage: BonsaiStorage<BasicId, _, Pedersen> = BonsaiStorage::new(
+        let mut bonsai_storage: BonsaiStorage<BasicId, _, PedersenBench> = BonsaiStorage::new(
             HashMapDb::<BasicId>::default(),
             BonsaiStorageConfig::default(),
             251,
@@ -252,9 +264,23 @@ fn pedersen_hash(c: &mut Criterion) {
             Felt::from_hex("0x00a038cda302fedbc4f6117648c6d3faca3cda924cb9c517b46232c6316b152f")
                 .unwrap();
         b.iter(|| {
-            black_box(Pedersen::hash(&felt0, &felt1));
+            black_box(PedersenBench::hash(&felt0, &felt1));
         })
     });
+}
+
+fn pedersen_hash_batch(c: &mut Criterion) {
+    let pairs: Vec<(Felt, Felt)> = (0..4096)
+        .map(|i| (Felt::from(i as u64), Felt::from((i + 1) as u64)))
+        .collect();
+    let mut group = c.benchmark_group("pedersen hash batch");
+    group.sample_size(10);
+    group.bench_function("pairs_4096", move |b| {
+        b.iter(|| {
+            black_box(PedersenBench::hash_pairs(black_box(&pairs)));
+        })
+    });
+    group.finish();
 }
 
 fn poseidon_hash(c: &mut Criterion) {
@@ -274,6 +300,6 @@ fn poseidon_hash(c: &mut Criterion) {
 criterion_group! {
     name = benches;
     config = Criterion::default(); // .with_profiler(flamegraph::FlamegraphProfiler::new(100));
-    targets = storage, one_update, five_updates, pedersen_hash, poseidon_hash, drop_storage, storage_with_insert, multiple_contracts
+    targets = storage, one_update, five_updates, pedersen_hash, pedersen_hash_batch, poseidon_hash, drop_storage, storage_with_insert, multiple_contracts
 }
 criterion_main!(benches);

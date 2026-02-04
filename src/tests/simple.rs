@@ -1003,10 +1003,10 @@ fn pedersen_gpu_matches_cpu_root_hash() {
         BonsaiStorage::new(HashMapDb::<BasicId>::default(), config, 24);
 
     let inputs = vec![
-        (vec![1, 2, 3, 4], Felt::from(11u64)),
-        (vec![1, 2, 3, 5], Felt::from(22u64)),
-        (vec![1, 2, 4, 0], Felt::from(33u64)),
-        (vec![2, 0, 0, 1], Felt::from(44u64)),
+        (vec![1, 2, 3], Felt::from(11u64)),
+        (vec![1, 2, 4], Felt::from(22u64)),
+        (vec![1, 3, 0], Felt::from(33u64)),
+        (vec![2, 0, 1], Felt::from(44u64)),
     ];
 
     for (key, value) in &inputs {
@@ -1020,7 +1020,7 @@ fn pedersen_gpu_matches_cpu_root_hash() {
     cpu.commit(commit_id).unwrap();
     gpu.commit(commit_id).unwrap();
 
-    let update_key = BitVec::from_vec(vec![1, 2, 3, 5]);
+    let update_key = BitVec::from_vec(vec![1, 2, 4]);
     cpu.insert(&identifier, &update_key, &Felt::from(99u64))
         .unwrap();
     gpu.insert(&identifier, &update_key, &Felt::from(99u64))
@@ -1034,6 +1034,21 @@ fn pedersen_gpu_matches_cpu_root_hash() {
         cpu.root_hash(&identifier).unwrap(),
         gpu.root_hash(&identifier).unwrap()
     );
+}
+
+#[cfg(feature = "pedersen-gpu")]
+#[test]
+fn pedersen_gpu_matches_reference_hash() {
+    use starknet_types_core::hash::StarkHash;
+
+    let x = Felt::from_hex("0x03d937c035c878245caf64531a5756109c53068da139362728feb561405371cb")
+        .unwrap();
+    let y = Felt::from_hex("0x0208a0a10250e382e1e4bbe2880906c2791bf6275695e02fbbc6aeff9cd8b31a")
+        .unwrap();
+
+    let expected = Pedersen::hash(&x, &y);
+    let got = crate::PedersenGpu::hash(&x, &y);
+    assert_eq!(expected, got);
 }
 
 #[test]
