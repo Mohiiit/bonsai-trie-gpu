@@ -119,6 +119,8 @@ pub type BitSlice = bitvec::slice::BitSlice<u8, bitvec::order::Msb0>;
 mod changes;
 mod hasher;
 mod key_value_db;
+#[cfg(feature = "std")]
+mod metrics;
 mod trie;
 
 mod bonsai_database;

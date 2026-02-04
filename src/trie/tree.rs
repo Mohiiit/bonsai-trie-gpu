@@ -306,6 +306,8 @@ impl<H: BonsaiHasher + Send + Sync> MerkleTree<H> {
             // compute hashes
             let mut hashes = vec![];
             self.compute_root_hash::<DB>(&mut hashes)?;
+            #[cfg(feature = "std")]
+            crate::metrics::record_hashes(hashes.len(), &self.identifier);
 
             // commit the tree
             self.commit_subtree::<DB>(
